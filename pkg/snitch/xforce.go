@@ -106,6 +106,10 @@ func (s *XForceScanner) Start(results chan *ScanResult) {
 	}
 }
 
+func (s *XForceScanner) Stop() {
+	s.stop <- true
+}
+
 // Remove deletes a sample from the scanning list
 func (s *XForceScanner) Remove(sample Sample) {
 	var newSamples []Sample
