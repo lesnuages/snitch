@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	vt "github.com/VirusTotal/vt-go"
+	"github.com/VirusTotal/vt-go"
 )
 
 // VTScanner is an implentation of Scanner
@@ -15,6 +15,7 @@ type VTScanner struct {
 	Provider  string
 	samples   []Sample
 	mutex     sync.Mutex
+	stop      chan bool
 }
 
 // NewVTScanner returns a new instance of VTScanner
@@ -24,6 +25,7 @@ func NewVTScanner(apiKey string, threshold int, name string) *VTScanner {
 		threshold: threshold,
 		Provider:  name,
 		samples:   []Sample{},
+		stop:      make(chan bool),
 	}
 }
 
@@ -39,9 +41,9 @@ func (s *VTScanner) Name() string {
 }
 
 // Threshold returns the threshold value
-// Virus Total free tier limit is 4 requests per minute
+// Virus Total free tier limit is 4 requests per minute, but 500 requests/day.
 func (s *VTScanner) Threshold() time.Duration {
-	return time.Duration(60/s.threshold) * time.Second
+	return 2 * time.Minute
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
@@ -52,11 +54,6 @@ func (s *VTScanner) MaxRequests() int {
 // Samples returns the sample list
 func (s *VTScanner) Samples() []Sample {
 	return s.samples
-}
-
-// Mutex --
-func (s *VTScanner) Mutex() *sync.Mutex {
-	return &s.mutex
 }
 
 // Scan checks a hash against the Virus Total platform records
@@ -77,16 +74,41 @@ func (s *VTScanner) Scan(samp Sample) (*ScanResult, error) {
 	}, nil
 }
 
+func (s *VTScanner) Start(results chan *ScanResult) {
+	for {
+		select {
+		default:
+			s.mutex.Lock()
+			batches := split(s.Samples(), s.MaxRequests())
+			s.mutex.Unlock()
+			for _, sampSlice := range batches {
+				for _, samp := range sampSlice {
+					r, err := s.Scan(samp)
+					if err != nil {
+						continue
+					}
+					results <- r
+					s.Remove(samp)
+				}
+				time.Sleep(s.Threshold())
+			}
+		case <-s.stop:
+			return
+		}
+	}
+}
+
+func (s *VTScanner) Stop() {
+	s.stop <- true
+}
+
 // Remove deletes a sample from the scanning list
 func (s *VTScanner) Remove(sample Sample) {
 	var newSamples []Sample
 	s.mutex.Lock()
-	if len(s.samples)-1 != 0 {
-		newSamples = make([]Sample, len(s.samples)-1)
-		for i, samp := range s.samples {
-			if samp.hash != sample.hash {
-				newSamples[i] = s.samples[i]
-			}
+	for _, samp := range s.samples {
+		if samp.hash != sample.hash {
+			newSamples = append(newSamples, samp)
 		}
 	}
 	s.samples = newSamples

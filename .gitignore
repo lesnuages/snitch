@@ -1,0 +1,6 @@
+.vscode
+snitch
+
+*.exe
+*.dll
+*.so

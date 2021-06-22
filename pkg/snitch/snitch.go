@@ -1,7 +1,6 @@
 package snitch
 
 import (
-	"sync"
 	"time"
 )
 
@@ -11,12 +10,8 @@ type Sample struct {
 	hash        string
 }
 
-// NewSample is the Sample constructor
-func NewSample(name string, hash string) Sample {
-	return Sample{
-		implantName: name,
-		hash:        hash,
-	}
+func (n *Sample) Name() string {
+	return n.implantName
 }
 
 // Snitch -- the Snitch struct
@@ -24,6 +19,7 @@ type Snitch struct {
 	scanners      map[string]Scanner
 	samples       chan Sample
 	stop          chan bool
+	scanResults   chan *ScanResult
 	HandleFlagged func(*ScanResult)
 }
 
@@ -42,10 +38,12 @@ type Scanner interface {
 	MaxRequests() int
 	// Scan performs the request to the API
 	Scan(Sample) (*ScanResult, error)
-	// Mutex is used to lock the sample list during async operations
-	Mutex() *sync.Mutex
 	// Name of the scanner
 	Name() string
+	// Start starts the scanning loop
+	Start(chan *ScanResult)
+	// Stop stops a scan loop
+	Stop()
 }
 
 // ScanResult stores a scan result
@@ -55,39 +53,13 @@ type ScanResult struct {
 	LastSeen time.Time
 }
 
-// ScanLoop --
-func ScanLoop(s Scanner, quit chan bool, handleResult func(*ScanResult)) {
-	for {
-		select {
-		case <-quit:
-			return
-		default:
-			// Split samples in equal chunks
-			s.Mutex().Lock()
-			batches := split(s.Samples(), s.MaxRequests())
-			s.Mutex().Unlock()
-			for _, sampSlice := range batches {
-				for _, samp := range sampSlice {
-					r, err := s.Scan(samp)
-					if err != nil {
-						return
-					}
-					go handleResult(r)
-				}
-				// Sleep after scanning a batch
-				time.Sleep(s.Threshold())
-			}
-
-		}
-	}
-}
-
 // NewSnitch returns a new Snitch instance
 func NewSnitch() *Snitch {
 	return &Snitch{
-		scanners: make(map[string]Scanner),
-		samples:  make(chan Sample),
-		stop:     make(chan bool),
+		scanners:    make(map[string]Scanner),
+		samples:     make(chan Sample),
+		stop:        make(chan bool),
+		scanResults: make(chan *ScanResult),
 	}
 }
 
@@ -106,40 +78,29 @@ func (s *Snitch) Start() {
 	go s.start()
 }
 
-func (s *Snitch) deleteSample(sample Sample) {
-	for _, scanner := range s.scanners {
-		scanner.Remove(sample)
-	}
-}
-
 func (s *Snitch) start() {
-	// start scanning loops
-	for _, scanner := range s.scanners {
-		go ScanLoop(scanner, s.stop, func(res *ScanResult) {
-			if res != nil {
-				// sample is flagged:
-				// - delete it from the list to avoid scanning it again
-				// - call the HandleFlagged() callback so the API user can be notified
-				s.deleteSample(res.Sample)
-				if s.HandleFlagged != nil {
-					s.HandleFlagged(res)
-				}
-			}
-		})
+	// Start all the registered scanners
+	for _, sc := range s.scanners {
+		go sc.Start(s.scanResults)
 	}
 	for {
 		select {
-		default:
-			for sample := range s.samples {
-				for _, scanner := range s.scanners {
-					scanner.Add(sample)
-				}
+		case sample := <-s.samples:
+			// Add new samples to the scanners' list
+			for _, sc := range s.scanners {
+				sc.Add(sample)
 			}
+		case result := <-s.scanResults:
+			// Pass the results to the caller
+			go s.HandleFlagged(result)
 		case <-s.stop:
+			// Stop the scan loops
+			for _, sc := range s.scanners {
+				sc.Stop()
+			}
 			return
 		}
 	}
-
 }
 
 // Stop stops the scanning loop

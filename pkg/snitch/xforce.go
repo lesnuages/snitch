@@ -16,6 +16,7 @@ type XForceScanner struct {
 	Provider    string
 	samples     []Sample
 	mutex       sync.Mutex
+	stop        chan bool
 }
 
 // NewXForceScanner returns a new XForceScanner instance
@@ -26,6 +27,7 @@ func NewXForceScanner(apiKey string, password string, threshold int, name string
 		samples:     []Sample{},
 		Provider:    name,
 		threshold:   threshold,
+		stop:        make(chan bool),
 	}
 }
 
@@ -36,7 +38,7 @@ func (s *XForceScanner) Name() string {
 // Threshold returns the threshold value
 // IBM X-Force API free tier limit is around 6 requests per hour (5000/month ~= 6.97/hour)
 func (s *XForceScanner) Threshold() time.Duration {
-	return time.Duration(60/s.threshold) * time.Minute
+	return 1 * time.Minute
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
@@ -78,16 +80,37 @@ func (s *XForceScanner) Scan(samp Sample) (*ScanResult, error) {
 	return res, nil
 }
 
+func (s *XForceScanner) Start(results chan *ScanResult) {
+	for {
+		select {
+		default:
+			s.mutex.Lock()
+			batches := split(s.Samples(), s.MaxRequests())
+			s.mutex.Unlock()
+			for _, sampSlice := range batches {
+				for _, samp := range sampSlice {
+					r, err := s.Scan(samp)
+					if err != nil {
+						continue
+					}
+					results <- r
+					s.Remove(samp)
+				}
+				time.Sleep(s.Threshold())
+			}
+		case <-s.stop:
+			return
+		}
+	}
+}
+
 // Remove deletes a sample from the scanning list
 func (s *XForceScanner) Remove(sample Sample) {
 	var newSamples []Sample
 	s.mutex.Lock()
-	if len(s.samples)-1 != 0 {
-		newSamples = make([]Sample, len(s.samples)-1)
-		for i, samp := range s.samples {
-			if samp.hash != sample.hash {
-				newSamples[i] = s.samples[i]
-			}
+	for _, samp := range s.samples {
+		if samp.hash != sample.hash {
+			newSamples = append(newSamples, samp)
 		}
 	}
 	s.samples = newSamples
