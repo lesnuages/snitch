@@ -18,11 +18,13 @@ type VTScanner struct {
 	stop      chan bool
 }
 
+const VTMaxRequests = 4
+
 // NewVTScanner returns a new instance of VTScanner
-func NewVTScanner(apiKey string, threshold int, name string) *VTScanner {
+func NewVTScanner(apiKey string, maxRequests int, name string) *VTScanner {
 	return &VTScanner{
 		APIKey:    apiKey,
-		threshold: threshold,
+		threshold: maxRequests,
 		Provider:  name,
 		samples:   []Sample{},
 		stop:      make(chan bool),

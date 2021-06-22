@@ -19,14 +19,16 @@ type XForceScanner struct {
 	stop        chan bool
 }
 
+const XForceMaxRequests = 6
+
 // NewXForceScanner returns a new XForceScanner instance
-func NewXForceScanner(apiKey string, password string, threshold int, name string) *XForceScanner {
+func NewXForceScanner(apiKey string, password string, maxRequests int, name string) *XForceScanner {
 	return &XForceScanner{
 		APIKey:      apiKey,
 		APIPassword: password,
 		samples:     []Sample{},
 		Provider:    name,
-		threshold:   threshold,
+		threshold:   maxRequests,
 		stop:        make(chan bool),
 	}
 }
@@ -38,7 +40,7 @@ func (s *XForceScanner) Name() string {
 // Threshold returns the threshold value
 // IBM X-Force API free tier limit is around 6 requests per hour (5000/month ~= 6.97/hour)
 func (s *XForceScanner) Threshold() time.Duration {
-	return 1 * time.Minute
+	return 10 * time.Minute
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
