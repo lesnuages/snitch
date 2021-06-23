@@ -17,13 +17,14 @@ type XForceScanner struct {
 	samples     []Sample
 	mutex       sync.Mutex
 	stop        chan bool
+	ticker      *time.Ticker
 }
 
 const XForceMaxRequests = 6
 
 // NewXForceScanner returns a new XForceScanner instance
 func NewXForceScanner(apiKey string, password string, maxRequests int, name string) *XForceScanner {
-	return &XForceScanner{
+	s := &XForceScanner{
 		APIKey:      apiKey,
 		APIPassword: password,
 		samples:     []Sample{},
@@ -31,6 +32,8 @@ func NewXForceScanner(apiKey string, password string, maxRequests int, name stri
 		threshold:   maxRequests,
 		stop:        make(chan bool),
 	}
+	s.ticker = time.NewTicker(s.Threshold())
+	return s
 }
 
 func (s *XForceScanner) Name() string {
@@ -85,7 +88,9 @@ func (s *XForceScanner) Scan(samp Sample) (*ScanResult, error) {
 func (s *XForceScanner) Start(results chan *ScanResult) {
 	for {
 		select {
-		default:
+		case <-s.stop:
+			return
+		case <-s.ticker.C:
 			s.mutex.Lock()
 			samps := s.samples
 			s.mutex.Unlock()
@@ -100,13 +105,12 @@ func (s *XForceScanner) Start(results chan *ScanResult) {
 				results <- r
 				s.Remove(sample)
 			}
-		case <-s.stop:
-			return
 		}
 	}
 }
 
 func (s *XForceScanner) Stop() {
+	s.ticker.Stop()
 	s.stop <- true
 }
 

@@ -14,6 +14,7 @@ type VTScanner struct {
 	threshold int
 	Provider  string
 	samples   []Sample
+	ticker    *time.Ticker
 	mutex     sync.Mutex
 	stop      chan bool
 }
@@ -22,13 +23,15 @@ const VTMaxRequests = 4
 
 // NewVTScanner returns a new instance of VTScanner
 func NewVTScanner(apiKey string, maxRequests int, name string) *VTScanner {
-	return &VTScanner{
+	s := &VTScanner{
 		APIKey:    apiKey,
 		threshold: maxRequests,
 		Provider:  name,
 		samples:   []Sample{},
 		stop:      make(chan bool),
 	}
+	s.ticker = time.NewTicker(s.Threshold())
+	return s
 }
 
 // Add adds a sample to the list
@@ -45,7 +48,7 @@ func (s *VTScanner) Name() string {
 // Threshold returns the threshold value
 // Virus Total free tier limit is 4 requests per minute, but 500 requests/day.
 func (s *VTScanner) Threshold() time.Duration {
-	return 2 * time.Minute
+	return 12 * time.Minute
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
@@ -79,7 +82,9 @@ func (s *VTScanner) Scan(samp Sample) (*ScanResult, error) {
 func (s *VTScanner) Start(results chan *ScanResult) {
 	for {
 		select {
-		default:
+		case <-s.stop:
+			return
+		case <-s.ticker.C:
 			s.mutex.Lock()
 			samps := s.samples
 			s.mutex.Unlock()
@@ -94,13 +99,36 @@ func (s *VTScanner) Start(results chan *ScanResult) {
 				results <- r
 				s.Remove(sample)
 			}
-		case <-s.stop:
-			return
 		}
 	}
 }
 
+// func (s *VTScanner) Start(results chan *ScanResult) {
+// 	for {
+// 		select {
+// 		default:
+// 			// s.mutex.Lock()
+// 			samps := s.samples
+// 			// s.mutex.Unlock()
+// 			for index, sample := range samps {
+// 				if index%s.MaxRequests() == 0 && index > 0 {
+// 					time.Sleep(s.Threshold())
+// 				}
+// 				r, err := s.Scan(sample)
+// 				if err != nil {
+// 					continue
+// 				}
+// 				results <- r
+// 				s.Remove(sample)
+// 			}
+// 		case <-s.stop:
+// 			return
+// 		}
+// 	}
+// }
+
 func (s *VTScanner) Stop() {
+	s.ticker.Stop()
 	s.stop <- true
 }
 
