@@ -112,15 +112,3 @@ func (s *Snitch) Stop() {
 func (s *Snitch) Add(name string, hash string) {
 	s.samples <- Sample{implantName: name, hash: hash}
 }
-
-func split(s []Sample, chunkSize int) [][]Sample {
-	var divided [][]Sample
-	for i := 0; i < len(s); i += chunkSize {
-		end := i + chunkSize
-		if end > len(s) {
-			end = len(s)
-		}
-		divided = append(divided, s[i:end])
-	}
-	return divided
-}

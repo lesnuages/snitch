@@ -81,18 +81,18 @@ func (s *VTScanner) Start(results chan *ScanResult) {
 		select {
 		default:
 			s.mutex.Lock()
-			batches := split(s.Samples(), s.MaxRequests())
+			samps := s.samples
 			s.mutex.Unlock()
-			for _, sampSlice := range batches {
-				for _, samp := range sampSlice {
-					r, err := s.Scan(samp)
-					if err != nil {
-						continue
-					}
-					results <- r
-					s.Remove(samp)
+			for index, sample := range samps {
+				if index%s.MaxRequests() == 0 && index > 0 {
+					time.Sleep(s.Threshold())
 				}
-				time.Sleep(s.Threshold())
+				r, err := s.Scan(sample)
+				if err != nil {
+					continue
+				}
+				results <- r
+				s.Remove(sample)
 			}
 		case <-s.stop:
 			return
