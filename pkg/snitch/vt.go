@@ -20,7 +20,10 @@ type VTScanner struct {
 	stop      chan bool
 }
 
-const VTMaxRequests = 4
+const (
+	VTMaxRequests      = 4
+	VTDefaultThreshold = 12 * time.Minute
+)
 
 // NewVTScanner returns a new instance of VTScanner
 func NewVTScanner(apiKey string, maxRequests int, name string) *VTScanner {
@@ -59,7 +62,7 @@ func (s *VTScanner) Name() string {
 // Threshold returns the threshold value
 // Virus Total free tier limit is 4 requests per minute, but 500 requests/day.
 func (s *VTScanner) Threshold() time.Duration {
-	return 2 * time.Minute
+	return VTDefaultThreshold
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
