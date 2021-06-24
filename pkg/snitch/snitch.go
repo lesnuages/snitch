@@ -29,8 +29,6 @@ type Scanner interface {
 	Add(Sample)
 	// Remove deletes a sample from the list
 	Remove(Sample)
-	// Samples is the accessor for the sample list
-	Samples() []Sample
 	// Threshold is the time we need to sleep before each batch of requests
 	Threshold() time.Duration
 	// MaxRequests represents the maximum number of requests we can make

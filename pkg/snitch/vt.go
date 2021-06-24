@@ -1,6 +1,7 @@
 package snitch
 
 import (
+	"container/ring"
 	"sync"
 	"time"
 
@@ -13,9 +14,9 @@ type VTScanner struct {
 	APIKey    string
 	threshold int
 	Provider  string
-	samples   []Sample
 	ticker    *time.Ticker
 	mutex     sync.Mutex
+	scanList  *ring.Ring
 	stop      chan bool
 }
 
@@ -27,8 +28,8 @@ func NewVTScanner(apiKey string, maxRequests int, name string) *VTScanner {
 		APIKey:    apiKey,
 		threshold: maxRequests,
 		Provider:  name,
-		samples:   []Sample{},
 		stop:      make(chan bool),
+		scanList:  ring.New(1),
 	}
 	s.ticker = time.NewTicker(s.Threshold())
 	return s
@@ -37,7 +38,17 @@ func NewVTScanner(apiKey string, maxRequests int, name string) *VTScanner {
 // Add adds a sample to the list
 func (s *VTScanner) Add(samp Sample) {
 	s.mutex.Lock()
-	s.samples = append(s.samples, samp)
+	// We can't create a 0 lenght ring
+	// so the first time a sample is added,
+	// the s.scanList.Value will be a nil pointer
+	if s.scanList.Value == nil {
+		s.scanList.Value = samp
+	} else {
+		newRing := ring.New(1)
+		newRing.Value = samp
+		// No need to call Next() here, as Link() does it for us
+		s.scanList.Link(newRing)
+	}
 	s.mutex.Unlock()
 }
 
@@ -48,17 +59,12 @@ func (s *VTScanner) Name() string {
 // Threshold returns the threshold value
 // Virus Total free tier limit is 4 requests per minute, but 500 requests/day.
 func (s *VTScanner) Threshold() time.Duration {
-	return 12 * time.Minute
+	return 2 * time.Minute
 }
 
 // MaxRequests represents the maximum number of requests that we can make in one minute
 func (s *VTScanner) MaxRequests() int {
 	return s.threshold
-}
-
-// Samples returns the sample list
-func (s *VTScanner) Samples() []Sample {
-	return s.samples
 }
 
 // Scan checks a hash against the Virus Total platform records
@@ -85,13 +91,26 @@ func (s *VTScanner) Start(results chan *ScanResult) {
 		case <-s.stop:
 			return
 		case <-s.ticker.C:
+			limit := s.MaxRequests()
 			s.mutex.Lock()
-			samps := s.samples
+			scanListLen := s.scanList.Len()
 			s.mutex.Unlock()
-			for index, sample := range samps {
-				if index%s.MaxRequests() == 0 && index > 0 {
-					time.Sleep(s.Threshold())
+			// We want to maximise the number of request we send
+			// at each tick, but we don't want to waste requests either.
+			// If we have less hashes to scan than the API rate limit,
+			// we only scan what we have once per tick.
+			if scanListLen < limit {
+				limit = scanListLen
+			}
+			for i := 0; i < limit; i++ {
+				s.mutex.Lock()
+				val := s.scanList.Value
+				s.scanList = s.scanList.Next()
+				s.mutex.Unlock()
+				if val == nil {
+					continue
 				}
+				sample := val.(Sample)
 				r, err := s.Scan(sample)
 				if err != nil {
 					continue
@@ -103,30 +122,6 @@ func (s *VTScanner) Start(results chan *ScanResult) {
 	}
 }
 
-// func (s *VTScanner) Start(results chan *ScanResult) {
-// 	for {
-// 		select {
-// 		default:
-// 			// s.mutex.Lock()
-// 			samps := s.samples
-// 			// s.mutex.Unlock()
-// 			for index, sample := range samps {
-// 				if index%s.MaxRequests() == 0 && index > 0 {
-// 					time.Sleep(s.Threshold())
-// 				}
-// 				r, err := s.Scan(sample)
-// 				if err != nil {
-// 					continue
-// 				}
-// 				results <- r
-// 				s.Remove(sample)
-// 			}
-// 		case <-s.stop:
-// 			return
-// 		}
-// 	}
-// }
-
 func (s *VTScanner) Stop() {
 	s.ticker.Stop()
 	s.stop <- true
@@ -134,13 +129,14 @@ func (s *VTScanner) Stop() {
 
 // Remove deletes a sample from the scanning list
 func (s *VTScanner) Remove(sample Sample) {
-	var newSamples []Sample
 	s.mutex.Lock()
-	for _, samp := range s.samples {
-		if samp.hash != sample.hash {
-			newSamples = append(newSamples, samp)
+	for i := 0; i < s.scanList.Len(); i++ {
+		r := s.scanList.Value
+		if r != nil && r.(Sample).hash == sample.hash {
+			s.scanList = s.scanList.Prev()
+			s.scanList.Unlink(1)
 		}
+		s.scanList = s.scanList.Next()
 	}
-	s.samples = newSamples
 	s.mutex.Unlock()
 }
